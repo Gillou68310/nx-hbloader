@@ -2,8 +2,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include "gdbstub.h"
 
-#define DEFAULT_NRO "sdmc:/hbmenu.nro"
+#define DEFAULT_NRO "sdmc:/nx-hbmenu.nro"
 
 const char g_noticeText[] =
     "nx-hbloader " VERSION "\0"
@@ -27,6 +28,7 @@ static u64 g_appletHeapReservationSize = 0;
 static u128 g_userIdStorage;
 
 static u8 g_savedTls[0x100];
+static bool g_debug = 0;
 
 // Minimize fs resource usage
 u32 __nx_fs_num_sessions = 1;
@@ -41,7 +43,7 @@ extern void* __stack_top;//Defined in libnx.
 
 void __libnx_initheap(void)
 {
-    static char g_innerheap[0x4000];
+    static char g_innerheap[0x100000];
 
     extern char* fake_heap_start;
     extern char* fake_heap_end;
@@ -144,7 +146,7 @@ static void setupHbHeap(void)
     g_heapSize = size;
 }
 
-static Handle g_procHandle;
+Handle g_procHandle;
 
 static void procHandleReceiveThread(void* arg)
 {
@@ -264,6 +266,12 @@ void loadNro(void)
 
     memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
 
+    if(g_debug)
+    {
+        GDBStub_shutdown();
+        g_debug = false;
+    }
+
     if (g_nroSize > 0)
     {
         // Unmap previous NRO.
@@ -300,7 +308,21 @@ void loadNro(void)
         memcpy(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
         memcpy(g_nextArgv,    DEFAULT_NRO, sizeof(DEFAULT_NRO));
     }
+	
+	char *debug = strstr(g_nextArgv, "_DEBUG_");
+	if(debug != NULL)
+	{
+		rc = smInitialize();
+		if (R_FAILED(rc))
+			fatalThrow(MAKERESULT(Module_HomebrewLoader, 27));
 
+		if(!GDBStub_init())
+            GDBStub_shutdown();
+		smExit();
+
+		g_debug = true;
+	}
+	
     memcpy(g_argv, g_nextArgv, sizeof g_argv);
 
     uint8_t *nrobuf = (uint8_t*) g_heapAddr;
@@ -456,6 +478,9 @@ void loadNro(void)
         g_smCloseWorkaround = true;
     }
 
+    if(g_debug)
+        GDBStub_add_execute_breakpoint(entrypoint);
+		
     extern NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
     nroEntrypointTrampoline((u64) entries, -1, entrypoint);
 }
